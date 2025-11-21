@@ -26,12 +26,12 @@ const int echoPin = D2; // Pin Echo
 const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
 
 // --- 4.B. Configuración de LEDs (Tu lógica) ---
-const int ledVerdePin = D3;
-const int ledRojoPin = D4;
+const int ledVerdePin = D5;
+const int ledRojoPin = D3;
 
 // --- 5. Lógica de Tiempos (Tu lógica) ---
-const unsigned long tiempoParaOcupar = 10000; // 10 segundos (en ms)
-const unsigned long tiempoParaLiberar = 20000; // 20 segundos (en ms)
+const unsigned long tiempoParaOcupar = 1000; // 1 segundo (en ms)
+const unsigned long tiempoParaLiberar = 2000; // 2 segundos (en ms)
 
 // --- 6. Variables de Estado (El "cerebro") ---
 bool estaOcupado = false; // El estado actual que recordamos
@@ -95,6 +95,18 @@ void loop() {
   // Filtro de ruido (ignora lecturas > 200cm o < 0)
   if (distance < 0 || distance > 200) {
     return; // Lectura errónea, saltar este ciclo
+  }
+
+  // --- ACTUALIZAR LEDs SEGÚN ESTADO ACTUAL ---
+  // Esto asegura que los LEDs siempre reflejen el estado correcto
+  if (estaOcupado) {
+    // OCUPADO: LED Rojo
+    digitalWrite(ledVerdePin, LOW);
+    digitalWrite(ledRojoPin, HIGH);
+  } else {
+    // LIBRE: LED Verde
+    digitalWrite(ledVerdePin, HIGH);
+    digitalWrite(ledRojoPin, LOW);
   }
 
   // --- 2. LA MÁQUINA DE ESTADOS (Tu lógica) ---
