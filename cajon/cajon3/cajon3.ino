@@ -1,18 +1,24 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#include <WiFiClientSecure.h> // <--- PARA HTTPS (Azure)!
 
 // --- 1. CONFIGURACIÓN DEL CAJÓN (¡MUY IMPORTANTE!) ---
-const int ID_DE_ESTE_CAJON = 1; // <--- Si este es el Cajón 1, pon 1. Si es el 2, pon 2.
+const int ID_DE_ESTE_CAJON = 3; // <--- CAMBIADO: Este es el Cajón 3
 
 // --- 2. Configuración WiFi (Tus datos) ---
-const char* ssid = "Tec-IoT";
-const char* password = "spotless.magnetic.bridge";
+// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
-// --- 3. Configuración API (IP Correcta) ---
-const char* IP_DE_TU_COMPUTADORA = "10.22.195.99"; // <--- Tu IP
-const char* apiURL_Ocupar = "http://%s:5074/Sensores/OcuparCajon";
-const char* apiURL_Liberar = "http://%s:5074/Sensores/LiberarCajon"; 
+const char* ssid = "IZZI-B790";         // <- WiFi actual
+const char* password = "2C9569A8B790";  // <- WiFi actual
+
+// --- 3. Configuración API (AZURE) ---
+// Ponemos el dominio SIN "https://" y SIN "/" al final
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net";
+
+// URLs actualizadas para HTTPS y sin puerto 5074
+const char* apiURL_Ocupar = "https://%s/Sensores/OcuparCajon";
+const char* apiURL_Liberar = "https://%s/Sensores/LiberarCajon";
 
 // --- 4. Configuración Sensor Ultrasónico ---
 const int trigPin = D1; // Pin Trig
@@ -20,8 +26,8 @@ const int echoPin = D2; // Pin Echo
 const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
 
 // --- 4.B. Configuración de LEDs (Tu lógica) ---
-const int ledVerdePin = D3; 
-const int ledRojoPin = D4;  
+const int ledVerdePin = D3;
+const int ledRojoPin = D4;
 
 // --- 5. Lógica de Tiempos (Tu lógica) ---
 const unsigned long tiempoParaOcupar = 10000; // 10 segundos (en ms)
@@ -39,11 +45,11 @@ void setup() {
   pinMode(echoPin, INPUT);
 
   // Configurar pines de LEDs
-  pinMode(ledVerdePin, OUTPUT); 
-  pinMode(ledRojoPin, OUTPUT);  
+  pinMode(ledVerdePin, OUTPUT);
+  pinMode(ledRojoPin, OUTPUT);
 
   // --- Conectar a WiFi ---
-  delay(10); 
+  delay(10);
   Serial.println();
   Serial.println("--- Conectando a WiFi ---");
   WiFi.begin(ssid, password);
@@ -57,12 +63,12 @@ void setup() {
   Serial.println("\n¡WiFi conectado!");
   Serial.print("IP del ESP8266: ");
   Serial.println(WiFi.localIP());
-  
+
   Serial.printf("Sensor del Cajón #%d INICIADO.\n", ID_DE_ESTE_CAJON);
-  
+
   // Poner estado inicial de LEDs (LIBRE)
-  digitalWrite(ledVerdePin, HIGH); 
-  digitalWrite(ledRojoPin, LOW);   
+  digitalWrite(ledVerdePin, HIGH);
+  digitalWrite(ledRojoPin, LOW);
 }
 
 
@@ -80,7 +86,7 @@ void loop() {
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
 
-  // --- IMPRIMIR VALOR CADA CICLO --- // <--- CAMBIO
+  // --- IMPRIMIR VALOR CADA CICLO ---
   Serial.print("Distancia: ");
   Serial.print(distance);
   Serial.println(" cm");
@@ -92,10 +98,10 @@ void loop() {
   }
 
   // --- 2. LA MÁQUINA DE ESTADOS (Tu lógica) ---
-  
+
   unsigned long tiempoActual = millis(); // El reloj actual
-  
-  if (estaOcupado == false) 
+
+  if (estaOcupado == false)
   {
     // MODO: "LIBRE" (Buscando un coche que LLEGUE)
     if (distance <= UMBRAL_DISTANCIA) {
@@ -104,20 +110,20 @@ void loop() {
         // Es la primera vez que lo vemos, iniciar timer
         Serial.printf("Objeto detectado... iniciando timer de %lu seg.\n", tiempoParaOcupar / 1000);
         tiempoDeCambio = tiempoActual;
-      } 
+      }
       else if (tiempoActual - tiempoDeCambio > tiempoParaOcupar) {
         // El objeto SIGUE AHÍ después de 10 segundos.
         Serial.println("¡CAJÓN OCUPADO!");
-        
+
         // --- Encender LED Rojo ---
-        digitalWrite(ledVerdePin, LOW);  
-        digitalWrite(ledRojoPin, HIGH); 
+        digitalWrite(ledVerdePin, LOW);
+        digitalWrite(ledRojoPin, HIGH);
 
         llamarAPI(apiURL_Ocupar); // Llamar al POST /OcuparCajon
         estaOcupado = true;      // Cambiar de modo
         tiempoDeCambio = 0;      // Resetear timer
       }
-    } 
+    }
     else {
       // No hay objeto. Si había una falsa alarma, resetear el timer.
       if (tiempoDeCambio > 0) {
@@ -125,8 +131,8 @@ void loop() {
       }
       tiempoDeCambio = 0;
     }
-  } 
-  else 
+  }
+  else
   {
     // MODO: "OCUPADO" (Buscando un coche que SE VAYA)
     if (distance > UMBRAL_DISTANCIA) {
@@ -135,20 +141,20 @@ void loop() {
         // Es la primera vez que no lo vemos, iniciar timer
         Serial.printf("Objeto no detectado... iniciando timer de %lu seg.\n", tiempoParaLiberar / 1000);
         tiempoDeCambio = tiempoActual;
-      } 
+      }
       else if (tiempoActual - tiempoDeCambio > tiempoParaLiberar) {
         // El objeto SIGUE SIN ESTAR después de 20 segundos.
         Serial.println("¡CAJÓN LIBERADO!");
 
         // --- Encender LED Verde ---
-        digitalWrite(ledVerdePin, HIGH); 
-        digitalWrite(ledRojoPin, LOW);  
+        digitalWrite(ledVerdePin, HIGH);
+        digitalWrite(ledRojoPin, LOW);
 
         llamarAPI(apiURL_Liberar); // Llamar al POST /LiberarCajon
         estaOcupado = false;     // Cambiar de modo
         tiempoDeCambio = 0;      // Resetear timer
       }
-    } 
+    }
     else {
       // El objeto sigue ahí. Resetear el timer de liberación.
       if (tiempoDeCambio > 0) {
@@ -159,7 +165,7 @@ void loop() {
   }
 
   // Pausa de 2 segundos entre mediciones
-  delay(2000); // <--- CAMBIO
+  delay(2000);
 }
 
 
@@ -170,7 +176,7 @@ void llamarAPI(const char* apiURL_plantilla) {
     return;
   }
 
-  // Crear el payload JSON: {"Id_Cajon": 1}
+  // Crear el payload JSON: {"Id_Cajon": 3}
   String payload = "{";
   payload += "\"Id_Cajon\": ";
   payload += String(ID_DE_ESTE_CAJON);
@@ -179,28 +185,31 @@ void llamarAPI(const char* apiURL_plantilla) {
   Serial.print("Enviando JSON: ");
   Serial.println(payload);
 
-  WiFiClient client;
+  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
+  WiFiClientSecure client;
+  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
+
   HTTPClient http;
 
   // Construir la URL completa
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_plantilla, IP_DE_TU_COMPUTADORA);
+  char urlCompleta[150];
+  sprintf(urlCompleta, apiURL_plantilla, IP_SERVIDOR);
 
   Serial.print("URL destino: ");
   Serial.println(urlCompleta);
 
   if (http.begin(client, urlCompleta)) {
     http.addHeader("Content-Type", "application/json");
-    
+
     int httpCode = http.POST(payload);
-    
+
     Serial.print("Código de respuesta HTTP: ");
     Serial.println(httpCode);
 
-    if (httpCode == HTTP_CODE_OK) {
-      Serial.println("¡Registro de cajón exitoso en la API!");
+    if (httpCode == HTTP_CODE_OK || httpCode == 200 || httpCode == 201) {
+      Serial.println("¡Registro de cajón exitoso en Azure!");
     } else {
-      Serial.println("Error al registrar en la API.");
+      Serial.println("Error al registrar en Azure.");
     }
     http.end();
   } else {

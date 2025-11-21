@@ -1,14 +1,20 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#include <WiFiClientSecure.h> // <--- PARA HTTPS (Azure)!
 
 // --- 1. Configuración WiFi (Nuestros datos) ---
-const char* ssid = "Tec-IoT";
-const char* password = "spotless.magnetic.bridge";
+// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
-// --- 2. Configuración API (Nuestra IP) ---
-const char* IP_DE_TU_COMPUTADORA = "10.22.195.99"; // <--- Tu IP
-const char* apiURL_plantilla = "http://%s:5074/Sensores/LuzNocturnaPost"; 
+const char* ssid = "IZZI-B790";         // <- WiFi actual
+const char* password = "2C9569A8B790";  // <- WiFi actual
+
+// --- 2. Configuración API (AZURE) ---
+// Ponemos el dominio SIN "https://" y SIN "/" al final
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net";
+
+// URL actualizada para HTTPS y sin puerto 5074
+const char* apiURL_plantilla = "https://%s/Sensores/LuzNocturnaPost"; 
 
 // --- 3. Configuración Sensor ---
 const int pinSensorLuz = A0; // Pin Analógico A0
@@ -100,7 +106,7 @@ void loop() {
 }
 
 
-// --- Función para enviar los POST (Sin cambios) ---
+// --- Función para enviar los POST ---
 void enviarNivelLuz(int nivel) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("POST: No hay WiFi.");
@@ -116,28 +122,31 @@ void enviarNivelLuz(int nivel) {
   Serial.print("Enviando JSON: ");
   Serial.println(payload);
 
-  WiFiClient client;
+  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
+  WiFiClientSecure client;
+  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
+
   HTTPClient http;
 
   // Construir la URL completa
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_plantilla, IP_DE_TU_COMPUTADORA);
+  char urlCompleta[150];
+  sprintf(urlCompleta, apiURL_plantilla, IP_SERVIDOR);
 
   Serial.print("URL destino: ");
   Serial.println(urlCompleta);
 
   if (http.begin(client, urlCompleta)) {
     http.addHeader("Content-Type", "application/json");
-    
+
     int httpCode = http.POST(payload);
-    
+
     Serial.print("Código de respuesta HTTP: ");
     Serial.println(httpCode);
 
-    if (httpCode == HTTP_CODE_OK) {
-      Serial.println("¡Estado de luz registrado en la API!");
+    if (httpCode == HTTP_CODE_OK || httpCode == 200 || httpCode == 201) {
+      Serial.println("¡Estado de luz registrado en Azure!");
     } else {
-      Serial.println("Error al registrar en la API.");
+      Serial.println("Error al registrar en Azure.");
     }
     http.end();
   } else {

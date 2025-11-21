@@ -1,151 +1,144 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
-#include <time.h>       // Para obtener la hora
-#include <sys/time.h>   // Para obtener los milisegundos
+#include <WiFiClientSecure.h> 
+#include <time.h>       
+#include <sys/time.h>   
 
-// --- 1. Configuración WiFi (Tus datos) ---
-const char* ssid = "Tec-IoT";
-const char* password = "spotless.magnetic.bridge";
+// --- 1. Configuración WiFi ---
+// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
+const char* ssid = "IZZI-B790";         // <- WiFi actual
+const char* password = "2C9569A8B790";  // <- WiFi actual
 
-// --- 2. Configuración API (¡AQUÍ CAMBIA LA IP!) ---
-const char* IP_DE_TU_COMPUTADORA = "10.22.195.99"; // <--- ¡REEMPLAZA ESTO! (ej: "192.168.1.100")
-// (Nota: Asumí que la URL no tiene espacio: "EntradaRegistro")
-const char* apiURL_plantilla = "http://%s:5074/Sensores/EntradaRegistro"; 
+// --- 2. Configuración API ---
+const char* apiURL = "https://estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net/Sensores/EntradaRegistro";
 
-// --- 3. Configuración Sensor ---
-const int trigPin = D1; // Pin Trig
-const int echoPin = D2; // Pin Echo
-const int UMBRAL_DISTANCIA = 2; // Umbral de 2 cm
+// --- 3. Configuración Sensor y LEDs ---
+const int trigPin = D1; 
+const int echoPin = D2; 
+const int UMBRAL_DISTANCIA = 5; 
 
-// --- Configuración de Hora (NTP) ---
+const int ledRojoEsperando = D3; 
+const int ledVerdeDetectado = D5;  
+
+// --- Configuración de Hora ---
 const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = -21600; 
+const int daylightOffset_sec = 0;
 
 void setup() {
   Serial.begin(115200);
-
-  // Configurar pines del sensor
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
+  pinMode(ledRojoEsperando, OUTPUT); 
+  pinMode(ledVerdeDetectado, OUTPUT);
+  
+  digitalWrite(ledRojoEsperando, HIGH); // Rojo ON (Inicio)
+  digitalWrite(ledVerdeDetectado, LOW);
 
-  // --- Conectar a WiFi ---
-  delay(10); 
-  Serial.println();
-  Serial.println("--- Conectando a WiFi --- CODIGO ENTRADA REGISTRO ---");
+  Serial.println("\n--- Conectando a WiFi ---");
   WiFi.begin(ssid, password);
-  Serial.print("Conectando a: ");
-  Serial.println(ssid);
-
+  
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    digitalWrite(ledRojoEsperando, LOW);
+    digitalWrite(ledRojoEsperando, HIGH);
     Serial.print(".");
   }
   Serial.println("\n¡WiFi conectado!");
-  Serial.print("IP del ESP8266: ");
-  Serial.println(WiFi.localIP());
-
-  // --- Sincronizar la hora ---
-  Serial.println("Sincronizando hora desde NTP...");
-  configTime(0, 0, ntpServer); // Configura para UTC (hora 'Z')
-
-  while (time(nullptr) < 8 * 3600 * 2) { // Espera a que la hora esté lista
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println("\n¡Hora sincronizada!");
+  
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.println("Sincronizando hora...");
+  while (time(nullptr) < 8 * 3600 * 2) { }
+  Serial.println("¡Hora lista!");
 }
 
 void loop() {
-  // 1. Obtener la distancia
   long duration;
   int distance;
 
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW); delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH); delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
 
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
 
-  Serial.print("Distancia: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  Serial.print("Distancia: "); Serial.println(distance);
 
-  // 2. Verificar la condición
-  // (distance > 0 es para filtrar lecturas erróneas)
-  if (distance >= 0 && distance <= UMBRAL_DISTANCIA) {
-    Serial.println("¡Objeto detectado! Registrando entrada...");
+  // --- LÓGICA PRINCIPAL CORREGIDA ---
+  
+  if (distance > 0 && distance <= UMBRAL_DISTANCIA) {
+    Serial.println("¡Objeto! Validando con Azure...");
     
-    // 3. Enviar el registro a la API
-    enviarRegistroEntrada();
+    // 1. Señal de "Procesando" (Ambos apagados o parpadeo rápido)
+    digitalWrite(ledRojoEsperando, LOW);
+    digitalWrite(ledVerdeDetectado, LOW);
+
+    // 2. Enviar a Azure y OBTENER RESPUESTA
+    int respuestaAzure = enviarRegistroEntrada();
+
+    // 3. TOMAR DECISIÓN SEGÚN RESPUESTA
+    if (respuestaAzure == 200 || respuestaAzure == 201) {
+        // --- CASO ÉXITO (Hay lugar) ---
+        Serial.println("✅ ACCESO CONCEDIDO (Verde)");
+        digitalWrite(ledVerdeDetectado, HIGH); // VERDE ON
+        digitalWrite(ledVerdeDetectado, LOW);
+    }
+    else {
+        // --- CASO FALLO (Lleno o Error) ---
+        Serial.println("❌ ACCESO DENEGADO / LLENO (Rojo)");
+        // Parpadear Rojo 5 veces rápido para indicar "LLENO"
+        for(int i=0; i<5; i++){
+            digitalWrite(ledRojoEsperando, HIGH);
+            digitalWrite(ledRojoEsperando, LOW);
+        }
+        // NO prendemos el verde, NO esperamos 5 segundos largos.
+        // Regresamos a detectar rápido.
+    }
     
-    // 4. Esperar 5 segundos para no saturar la base de datos
-    Serial.println("Esperando 5 segundos antes de re-armar...");
-    delay(5000);
+    // Volver a estado base
+    digitalWrite(ledRojoEsperando, HIGH); 
+    
   }
-
-  delay(250); // Pequeña pausa entre mediciones
+  else {
+    // Nada detectado
+    digitalWrite(ledRojoEsperando, HIGH);
+    digitalWrite(ledVerdeDetectado, LOW);
+  }
 }
 
-void enviarRegistroEntrada() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("No hay WiFi para enviar el registro.");
-    return;
-  }
+// --- AHORA ESTA FUNCIÓN REGRESA UN 'int' (El código de error) ---
+int enviarRegistroEntrada() {
+  if (WiFi.status() != WL_CONNECTED) return -1;
     
-  // --- Crear el Timestamp EXACTO (con milisegundos) ---
   struct timeval tv;
-  gettimeofday(&tv, nullptr); // Obtiene tiempo con microsegundos
-  
+  gettimeofday(&tv, nullptr); 
   char timestampBase[40];
-  // Formatea la parte YYYY-MM-DDTHH:MM:SS
-  strftime(timestampBase, sizeof(timestampBase), "%Y-%m-%dT%H:%M:%S", gmtime(&tv.tv_sec));
-  
+  strftime(timestampBase, sizeof(timestampBase), "%Y-%m-%dT%H:%M:%S", localtime(&tv.tv_sec));
   char timestampFinal[50];
-  // Añade los milisegundos y la 'Z' (formato UTC)
-  sprintf(timestampFinal, "%s.%03ldZ", timestampBase, tv.tv_usec / 1000);
-  // --- Fin del Timestamp ---
+  sprintf(timestampFinal, "%s.%03ld", timestampBase, tv.tv_usec / 1000);
 
-  // Crear el payload JSON dinámicamente
   String payload = "{";
   payload += "\"id_entrada_Pk\": 0,";
   payload += "\"fecha_Hora_Entrada\": \"";
   payload += timestampFinal;
   payload += "\"}";
 
-  Serial.print("Enviando JSON: ");
-  Serial.println(payload);
-
-  // Enviar el POST
-  WiFiClient client;
+  WiFiClientSecure client;
+  client.setInsecure();
   HTTPClient http;
+  http.setTimeout(15000); 
 
-  // Construir la URL completa con la IP de tu PC
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_plantilla, IP_DE_TU_COMPUTADORA);
+  int httpCode = -1; // Valor por defecto si falla conexión
 
-  Serial.print("URL destino: ");
-  Serial.println(urlCompleta);
-
-  if (http.begin(client, urlCompleta)) {
+  if (http.begin(client, apiURL)) {
     http.addHeader("Content-Type", "application/json");
-    
-    int httpCode = http.POST(payload);
-    
-    Serial.print("Código de respuesta HTTP: ");
+    httpCode = http.POST(payload); // Guardamos el código (200, 400, etc)
+    Serial.print("Respuesta Azure: ");
     Serial.println(httpCode);
-
-    if (httpCode == HTTP_CODE_OK || httpCode == 201) { // 200 (OK) o 201 (Created)
-      Serial.println("¡Entrada registrada en la BD con éxito!");
-    } else {
-      Serial.println("Error al registrar, el servidor respondió.");
-    }
-    
     http.end();
-  } else {
-    Serial.println("Error al iniciar conexión HTTP.");
   }
+  
+  return httpCode; // <-- Regresamos el código al loop para que decida los LEDs
 }

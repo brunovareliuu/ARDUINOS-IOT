@@ -1,20 +1,21 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
-#include <ArduinoJson.h> // <-- ¡LIBRERÍA NUEVA!
-#include <time.h>        // Para el POST
-#include <sys/time.h>    // Para el POST
+#include <WiFiClientSecure.h> // <--- ¡CAMBIO: Para HTTPS (Azure)!
+#include <ArduinoJson.h> 
+#include <time.h>        
+#include <sys/time.h>    
 
 // --- 1. Configuración WiFi ---
 const char* ssid = "Tec-IoT";
 const char* password = "spotless.magnetic.bridge";
 
-// --- 2. Configuración API (¡IP CORREGIDA!) ---
-const char* IP_DE_TU_COMPUTADORA = "10.22.195.99"; // <--- ¡LA IP CORRECTA!
+// --- 2. Configuración API (AZURE) ---
+// Ponemos el dominio SIN "https://" y SIN "/" al final
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 
 
-// URLs de los dos endpoints que vamos a usar
-const char* apiURL_POST_Salida = "http://%s:5074/Sensores/SalidaRegistro";
-const char* apiURL_GET_Disponibilidad = "http://%s:5074/Sensores/Disponibilidad";
+// URLs actualizadas para HTTPS y sin puerto 5074
+const char* apiURL_POST_Salida = "https://%s/Sensores/SalidaRegistro";
+const char* apiURL_GET_Disponibilidad = "https://%s/Sensores/Disponibilidad";
 
 // --- 3. Configuración Pines ---
 const int botonPin = D1;
@@ -22,9 +23,7 @@ const int ledVerdePin = D2; // Verde = Hay Lugares
 const int ledRojoPin = D4;  // Rojo = Lleno
 
 // --- 4. Configuración de Timers ---
-// Para el botón
 int estadoBotonAnterior = HIGH; 
-// Para el GET (Manejador de tiempo con millis() para no usar delay())
 unsigned long tiempoAnteriorGET = 0;
 const long intervaloGET = 5000; // 5 segundos
 
@@ -44,7 +43,8 @@ void setup() {
   digitalWrite(ledRojoPin, HIGH); 
 
   // --- Conectar a WiFi ---
-  Serial.println("--- Conectando a WiFi ---");
+  Serial.println();
+  Serial.println("--- Conectando a WiFi (Modo Azure) ---");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -54,8 +54,8 @@ void setup() {
   Serial.print("IP del ESP8266: ");
   Serial.println(WiFi.localIP());
 
-  // --- Sincronizar la hora (SOLO para el POST) ---
-  Serial.println("Sincronizando hora (para el POST)...");
+  // --- Sincronizar la hora ---
+  Serial.println("Sincronizando hora...");
   configTime(0, 0, ntpServer); 
   while (time(nullptr) < 8 * 3600 * 2) { 
     delay(500);
@@ -64,7 +64,8 @@ void setup() {
   Serial.println("\n¡Hora sincronizada!");
   
   Serial.println("Sistema de Salida y Disponibilidad INICIADO.");
-  // Hacemos una primera llamada al GET para saber el estado inicial
+  
+  // Primera llamada para actualizar LEDs
   actualizarDisponibilidad(); 
 }
 
@@ -74,12 +75,9 @@ void loop() {
   chequearBoton();
 
   // --- TRABAJO 2: Chequear la disponibilidad (GET) ---
-  // Esto usa millis() para NO bloquear el código.
-  // Solo se ejecuta si han pasado 5 segundos desde la última vez.
   unsigned long tiempoActual = millis();
   if (tiempoActual - tiempoAnteriorGET >= intervaloGET) {
     tiempoAnteriorGET = tiempoActual; // Reiniciar el timer
-    
     Serial.println("\nActualizando disponibilidad (GET)...");
     actualizarDisponibilidad();
   }
@@ -89,18 +87,20 @@ void loop() {
 void actualizarDisponibilidad() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("GET: No hay WiFi.");
-    // Si no hay WiFi, ponemos el letrero en Rojo (Lleno) como precaución
     digitalWrite(ledVerdePin, LOW);
     digitalWrite(ledRojoPin, HIGH);
     return;
   }
 
-  WiFiClient client;
+  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
+  WiFiClientSecure client;
+  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
+
   HTTPClient http;
 
   // Construir la URL del GET
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_GET_Disponibilidad, IP_DE_TU_COMPUTADORA);
+  char urlCompleta[150];
+  sprintf(urlCompleta, apiURL_GET_Disponibilidad, IP_SERVIDOR);
   
   Serial.print("GET URL: ");
   Serial.println(urlCompleta);
@@ -111,16 +111,15 @@ void actualizarDisponibilidad() {
     if (httpCode == HTTP_CODE_OK) {
       Serial.println("GET: Respuesta OK (200).");
       String payload = http.getString();
-      Serial.println(payload); // Imprime el JSON: {"totalLugares":5,"ocupados":2,"disponibles":3}
+      Serial.println(payload); 
 
-      // --- Aquí usamos ArduinoJson para LEER la respuesta ---
-      StaticJsonDocument<128> doc; // Documento JSON pequeño
+      // --- Leer JSON ---
+      StaticJsonDocument<128> doc; 
       DeserializationError error = deserializeJson(doc, payload);
 
       if (error) {
         Serial.print("deserializeJson() falló: ");
         Serial.println(error.c_str());
-        // Error de JSON, poner en Rojo por precaución
         digitalWrite(ledVerdePin, LOW);
         digitalWrite(ledRojoPin, HIGH);
       } else {
@@ -140,12 +139,10 @@ void actualizarDisponibilidad() {
           digitalWrite(ledRojoPin, HIGH); // LLENO
         }
       }
-      // ----------------------------------------------------
 
     } else {
       Serial.print("GET: Error en la llamada, código: ");
       Serial.println(httpCode);
-      // Error de API, poner en Rojo por precaución
       digitalWrite(ledVerdePin, LOW);
       digitalWrite(ledRojoPin, HIGH);
     }
@@ -160,28 +157,24 @@ void actualizarDisponibilidad() {
 void chequearBoton() {
   int estadoBotonActual = digitalRead(botonPin);
 
-  // Detectar "flanco de bajada" (cuando se presiona)
+  // Detectar "flanco de bajada"
   if (estadoBotonActual == LOW && estadoBotonAnterior == HIGH) {
     Serial.println("\n¡Botón presionado! Registrando salida (POST)...");
-    
-    // Llamar a la función que envía el POST
     enviarRegistroSalida();
-    
-    // Pequeño delay para "debounce" (evitar rebotes)
     delay(200);
   }
   
   estadoBotonAnterior = estadoBotonActual;
 }
 
-// --- Esta función SOLO envía el POST y NO toca los LEDs ---
+// --- Esta función SOLO envía el POST ---
 void enviarRegistroSalida() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("POST: No hay WiFi para enviar el registro.");
-    return; // No hace nada más
+    return; 
   }
     
-  // --- Crear el Timestamp (igual que antes) ---
+  // --- Crear el Timestamp ---
   struct timeval tv;
   gettimeofday(&tv, nullptr); 
   char timestampBase[40];
@@ -199,12 +192,18 @@ void enviarRegistroSalida() {
   Serial.print("POST: Enviando JSON: ");
   Serial.println(payload);
 
-  WiFiClient client;
+  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
+  WiFiClientSecure client;
+  client.setInsecure(); // <--- IMPORTANTE
+
   HTTPClient http;
 
   // Construir la URL del POST
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_POST_Salida, IP_DE_TU_COMPUTADORA);
+  char urlCompleta[150];
+  sprintf(urlCompleta, apiURL_POST_Salida, IP_SERVIDOR);
+
+  Serial.print("POST URL: ");
+  Serial.println(urlCompleta);
 
   if (http.begin(client, urlCompleta)) {
     http.addHeader("Content-Type", "application/json");
@@ -214,8 +213,8 @@ void enviarRegistroSalida() {
     Serial.print("POST: Código de respuesta HTTP: ");
     Serial.println(httpCode);
     
-    if (httpCode == HTTP_CODE_OK || httpCode == 201) { 
-      Serial.println("¡Salida registrada en la BD con éxito!");
+    if (httpCode == HTTP_CODE_OK || httpCode == 200 || httpCode == 201) { 
+      Serial.println("¡Salida registrada en Azure con éxito!");
     } else {
       Serial.println("POST: Error al registrar.");
     }

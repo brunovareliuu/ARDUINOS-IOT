@@ -1,16 +1,21 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#include <WiFiClientSecure.h> // <--- PARA HTTPS (Azure)!
 #include <NewPing.h> // Tu librería de sensor
 
 // --- 1. Configuración WiFi (Nuestros datos) ---
-const char* ssid = "Tec-IoT";
-const char* password = "spotless.magnetic.bridge";
+// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
-// --- 2. Configuración API (¡NUEVA API!) ---
-const char* IP_DE_TU_COMPUTADORA = "10.22.195.99"; // <--- Tu IP
-// (Endpoint del NUEVO CajaController)
-const char* apiURL_plantilla = "http://%s:5074/Caja/CambiarEstado"; 
+const char* ssid = "IZZI-B790";         // <- WiFi actual
+const char* password = "2C9569A8B790";  // <- WiFi actual
+
+// --- 2. Configuración API (AZURE) ---
+// Ponemos el dominio SIN "https://" y SIN "/" al final
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net";
+
+// URL actualizada para HTTPS y sin puerto 5074
+const char* apiURL_plantilla = "https://%s/Caja/CambiarEstado"; 
 
 // --- 3. Hardware (Tu lógica nueva) ---
 // Sensor (Tus pines)
@@ -117,14 +122,13 @@ void cajaLlenaLEDs() {
 void cajaVaciaLEDs_parpadear() {
   // Verde APAGADO
   digitalWrite(LED_VERDE, LOW);
-  
+
   // Rojos PRENDIDOS
   digitalWrite(LED_ROJO_1, HIGH);
-  digitalWrite(LED_ROJO_2, HIGH);
-  
+
   // Pequeña pausa (este delay SÍ es bloqueante,
   // pero como el loop se corre cada 500ms, está bien)
-  delay(100); 
+  delay(100);
 
   // Rojos APAGADOS
   digitalWrite(LED_ROJO_1, LOW);
@@ -152,28 +156,31 @@ void enviarEstadoAPI(bool estaLleno) {
 
   Serial.println(payload);
 
-  WiFiClient client;
+  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
+  WiFiClientSecure client;
+  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
+
   HTTPClient http;
 
-  // 3. Construir la URL completa
-  char urlCompleta[100];
-  sprintf(urlCompleta, apiURL_plantilla, IP_DE_TU_COMPUTADORA);
+  // Construir la URL completa
+  char urlCompleta[150];
+  sprintf(urlCompleta, apiURL_plantilla, IP_SERVIDOR);
 
   Serial.print("URL destino: ");
   Serial.println(urlCompleta);
 
   if (http.begin(client, urlCompleta)) {
     http.addHeader("Content-Type", "application/json");
-    
+
     int httpCode = http.POST(payload);
-    
+
     Serial.print("Código de respuesta HTTP: ");
     Serial.println(httpCode);
 
-    if (httpCode == HTTP_CODE_OK) {
-      Serial.println("¡Estado de la caja registrado en la API!");
+    if (httpCode == HTTP_CODE_OK || httpCode == 200 || httpCode == 201) {
+      Serial.println("¡Estado de la caja registrado en Azure!");
     } else {
-      Serial.println("Error al registrar en la API.");
+      Serial.println("Error al registrar en Azure.");
     }
     http.end();
   } else {
