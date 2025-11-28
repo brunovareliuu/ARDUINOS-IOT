@@ -1,230 +1,160 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClientSecure.h> // <--- PARA HTTPS (Azure)!
+#include <WiFiClientSecure.h> 
 
-// --- 1. CONFIGURACIÓN DEL CAJÓN (¡MUY IMPORTANTE!) ---
-const int ID_DE_ESTE_CAJON = 2; // <--- CAMBIADO: Este es el Cajón 2
+// --- 1. CONFIGURACIÓN DEL CAJÓN ---
+// Cambia esto según el cajón físico (1, 2 o 3)
+const int ID_CAJON = 2; 
 
-// --- 2. Configuración WiFi (Tus datos) ---
-// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
-// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
-
+// --- 2. WIFI ---
+// const char* ssid = "Tec-IoT";
+// const char* password = "spotless.magnetic.bridge";
 const char* ssid = "IZZI-B790";         // <- WiFi actual
 const char* password = "2C9569A8B790";  // <- WiFi actual
 
-// --- 3. Configuración API (AZURE) ---
-// Ponemos el dominio SIN "https://" y SIN "/" al final
-const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net";
+// --- 3. AZURE API ---
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 
 
-// URLs actualizadas para HTTPS y sin puerto 5074
-const char* apiURL_Ocupar = "https://%s/Sensores/OcuparCajon";
-const char* apiURL_Liberar = "https://%s/Sensores/LiberarCajon";
+// Endpoints
+String apiURL_Ocupar = "https://" + String(IP_SERVIDOR) + "/Sensores/OcuparCajon";
+String apiURL_Liberar = "https://" + String(IP_SERVIDOR) + "/Sensores/LiberarCajon";
 
-// --- 4. Configuración Sensor Ultrasónico ---
-const int trigPin = D1; // Pin Trig
-const int echoPin = D2; // Pin Echo
-const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
+// --- 4. HARDWARE ---
+const int trigPin = D1; 
+const int echoPin = D2; 
 
-// --- 4.B. Configuración de LEDs (Tu lógica) ---
-const int ledVerdePin = D5;
-const int ledRojoPin = D3;
+// LEDS RGB (Ánodo Común)
+const int pinRojo = D6;  
+const int pinVerde = D7; 
+const int pinAzul = D5;  
 
-// --- 5. Lógica de Tiempos (Tu lógica) ---
-const unsigned long tiempoParaOcupar = 1000; // 1 segundo (en ms)
-const unsigned long tiempoParaLiberar = 2000; // 2 segundos (en ms)
+const int UMBRAL_DISTANCIA = 7; // cm
 
-// --- 6. Variables de Estado (El "cerebro") ---
-bool estaOcupado = false; // El estado actual que recordamos
-unsigned long tiempoDeCambio = 0; // El temporizador (usa millis())
+// --- 5. VARIABLES DE CONTROL ---
+bool estaOcupado = false; // Memoria del estado actual
 
 void setup() {
   Serial.begin(115200);
+  
+  pinMode(trigPin, OUTPUT); pinMode(echoPin, INPUT);
+  pinMode(pinRojo, OUTPUT); pinMode(pinVerde, OUTPUT); pinMode(pinAzul, OUTPUT);
 
-  // Configurar pines del sensor
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
+  // --- Test de colores (Ánodo Común: LOW = Prende) ---
+  // Rojo
+  digitalWrite(pinRojo, LOW); digitalWrite(pinVerde, HIGH); digitalWrite(pinAzul, HIGH);
+  delay(500);
+  // Verde
+  digitalWrite(pinRojo, HIGH); digitalWrite(pinVerde, LOW); digitalWrite(pinAzul, HIGH);
+  delay(500);
+  // Azul
+  digitalWrite(pinRojo, HIGH); digitalWrite(pinVerde, HIGH); digitalWrite(pinAzul, LOW);
+  delay(500);
+  
+  // Iniciar en VERDE (Libre por defecto)
+  ponerColorVerde(); 
 
-  // Configurar pines de LEDs
-  pinMode(ledVerdePin, OUTPUT);
-  pinMode(ledRojoPin, OUTPUT);
-
-  // --- Conectar a WiFi ---
-  delay(10);
-  Serial.println();
-  Serial.println("--- Conectando a WiFi ---");
+  Serial.println("\n--- SENSOR DE CAJON INICIADO ---");
+  
   WiFi.begin(ssid, password);
-  Serial.print("Conectando a: ");
-  Serial.println(ssid);
-
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    // Parpadeo azul mientras conecta
+    digitalWrite(pinAzul, LOW); delay(100); digitalWrite(pinAzul, HIGH); delay(100);
     Serial.print(".");
   }
-  Serial.println("\n¡WiFi conectado!");
-  Serial.print("IP del ESP8266: ");
-  Serial.println(WiFi.localIP());
-
-  Serial.printf("Sensor del Cajón #%d INICIADO.\n", ID_DE_ESTE_CAJON);
-
-  // Poner estado inicial de LEDs (LIBRE)
-  digitalWrite(ledVerdePin, HIGH);
-  digitalWrite(ledRojoPin, LOW);
+  Serial.println("\n¡Conectado!");
+  
+  // Restaurar verde
+  ponerColorVerde();
 }
 
-
 void loop() {
-  // 1. Obtener la distancia
   long duration;
   int distance;
-
+  
+  // Medir
+  digitalWrite(trigPin, LOW); delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH); delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
 
-  // --- IMPRIMIR VALOR CADA CICLO ---
-  Serial.print("Distancia: ");
-  Serial.print(distance);
-  Serial.println(" cm");
-  // --- FIN DE LA IMPRESIÓN ---
+  Serial.print("Cajon "); Serial.print(ID_CAJON);
+  Serial.print(" | Distancia: "); Serial.print(distance); 
+  Serial.println(estaOcupado ? " [OCUPADO]" : " [LIBRE]");
 
-  // Filtro de ruido (ignora lecturas > 200cm o < 0)
-  if (distance < 0 || distance > 200) {
-    return; // Lectura errónea, saltar este ciclo
+  // --- LÓGICA DE CAMBIO DE ESTADO ---
+  
+  // CASO 1: DETECTA CARRO (y antes estaba libre)
+  if (distance > 0 && distance <= UMBRAL_DISTANCIA && !estaOcupado) {
+    Serial.println(">>> 🚗 CARRO LLEGÓ. CAMBIANDO A OCUPADO (ROJO)...");
+    
+    // 1. Cambiar visualmente primero (Feedback inmediato)
+    ponerColorRojo();
+    
+    // 2. Avisar a Azure
+    enviarEstado(true); // true = Ocupar
+    
+    estaOcupado = true; // Actualizar memoria
   }
-
-  // --- ACTUALIZAR LEDs SEGÚN ESTADO ACTUAL ---
-  // Esto asegura que los LEDs siempre reflejen el estado correcto
-  if (estaOcupado) {
-    // OCUPADO: LED Rojo
-    digitalWrite(ledVerdePin, LOW);
-    digitalWrite(ledRojoPin, HIGH);
-  } else {
-    // LIBRE: LED Verde
-    digitalWrite(ledVerdePin, HIGH);
-    digitalWrite(ledRojoPin, LOW);
+  
+  // CASO 2: SE VA EL CARRO (y antes estaba ocupado)
+  else if ((distance > UMBRAL_DISTANCIA || distance == 0) && estaOcupado) {
+    Serial.println(">>> 💨 CARRO SE FUE. CAMBIANDO A LIBRE (VERDE)...");
+    
+    // 1. Cambiar visualmente
+    ponerColorVerde();
+    
+    // 2. Avisar a Azure
+    enviarEstado(false); // false = Liberar
+    
+    estaOcupado = false; // Actualizar memoria
   }
-
-  // --- 2. LA MÁQUINA DE ESTADOS (Tu lógica) ---
-
-  unsigned long tiempoActual = millis(); // El reloj actual
-
-  if (estaOcupado == false)
-  {
-    // MODO: "LIBRE" (Buscando un coche que LLEGUE)
-    if (distance <= UMBRAL_DISTANCIA) {
-      // Objeto detectado.
-      if (tiempoDeCambio == 0) {
-        // Es la primera vez que lo vemos, iniciar timer
-        Serial.printf("Objeto detectado... iniciando timer de %lu seg.\n", tiempoParaOcupar / 1000);
-        tiempoDeCambio = tiempoActual;
-      }
-      else if (tiempoActual - tiempoDeCambio > tiempoParaOcupar) {
-        // El objeto SIGUE AHÍ después de 10 segundos.
-        Serial.println("¡CAJÓN OCUPADO!");
-
-        // --- Encender LED Rojo ---
-        digitalWrite(ledVerdePin, LOW);
-        digitalWrite(ledRojoPin, HIGH);
-
-        llamarAPI(apiURL_Ocupar); // Llamar al POST /OcuparCajon
-        estaOcupado = true;      // Cambiar de modo
-        tiempoDeCambio = 0;      // Resetear timer
-      }
-    }
-    else {
-      // No hay objeto. Si había una falsa alarma, resetear el timer.
-      if (tiempoDeCambio > 0) {
-         Serial.println("Falsa alarma. Objeto se fue antes de tiempo.");
-      }
-      tiempoDeCambio = 0;
-    }
-  }
-  else
-  {
-    // MODO: "OCUPADO" (Buscando un coche que SE VAYA)
-    if (distance > UMBRAL_DISTANCIA) {
-      // Objeto ya no está.
-      if (tiempoDeCambio == 0) {
-        // Es la primera vez que no lo vemos, iniciar timer
-        Serial.printf("Objeto no detectado... iniciando timer de %lu seg.\n", tiempoParaLiberar / 1000);
-        tiempoDeCambio = tiempoActual;
-      }
-      else if (tiempoActual - tiempoDeCambio > tiempoParaLiberar) {
-        // El objeto SIGUE SIN ESTAR después de 20 segundos.
-        Serial.println("¡CAJÓN LIBERADO!");
-
-        // --- Encender LED Verde ---
-        digitalWrite(ledVerdePin, HIGH);
-        digitalWrite(ledRojoPin, LOW);
-
-        llamarAPI(apiURL_Liberar); // Llamar al POST /LiberarCajon
-        estaOcupado = false;     // Cambiar de modo
-        tiempoDeCambio = 0;      // Resetear timer
-      }
-    }
-    else {
-      // El objeto sigue ahí. Resetear el timer de liberación.
-      if (tiempoDeCambio > 0) {
-         Serial.println("El coche sigue ahí. Reseteando timer de liberación.");
-      }
-      tiempoDeCambio = 0;
-    }
-  }
-
-  // Pausa de 2 segundos entre mediciones
-  delay(2000);
+  
+  delay(1000); // Revisar cada segundo
 }
 
+// --- FUNCIONES DE COLOR (Ánodo Común) ---
+// Recordatorio: LOW prende, HIGH apaga
 
-// --- 3. Función para enviar los POST ---
-void llamarAPI(const char* apiURL_plantilla) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("POST: No hay WiFi.");
-    return;
-  }
+void ponerColorRojo() {
+  digitalWrite(pinRojo, LOW);  // Prende Rojo
+  digitalWrite(pinVerde, HIGH); // Apaga Verde
+  digitalWrite(pinAzul, HIGH);  // Apaga Azul
+}
 
-  // Crear el payload JSON: {"Id_Cajon": 2}
-  String payload = "{";
-  payload += "\"Id_Cajon\": ";
-  payload += String(ID_DE_ESTE_CAJON);
-  payload += "}";
+void ponerColorVerde() {
+  digitalWrite(pinRojo, HIGH);  // Apaga Rojo
+  digitalWrite(pinVerde, LOW);  // Prende Verde
+  digitalWrite(pinAzul, HIGH);  // Apaga Azul
+}
 
-  Serial.print("Enviando JSON: ");
-  Serial.println(payload);
+// --- FUNCIÓN DE ENVÍO A AZURE ---
+void enviarEstado(bool ocupar) {
+  if (WiFi.status() != WL_CONNECTED) return;
 
-  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
   WiFiClientSecure client;
-  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
-
+  client.setInsecure(); // Importante
   HTTPClient http;
-
-  // Construir la URL completa
-  char urlCompleta[150];
-  sprintf(urlCompleta, apiURL_plantilla, IP_SERVIDOR);
-
-  Serial.print("URL destino: ");
-  Serial.println(urlCompleta);
-
-  if (http.begin(client, urlCompleta)) {
+  
+  // Elegir URL según la acción
+  String url = ocupar ? apiURL_Ocupar : apiURL_Liberar;
+  
+  // JSON simple: {"Id_Cajon": 1}
+  String payload = "{\"Id_Cajon\": " + String(ID_CAJON) + "}";
+  
+  Serial.print("Enviando a Azure: "); Serial.println(url);
+  
+  if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
-
     int httpCode = http.POST(payload);
-
-    Serial.print("Código de respuesta HTTP: ");
-    Serial.println(httpCode);
-
-    if (httpCode == HTTP_CODE_OK || httpCode == 200 || httpCode == 201) {
-      Serial.println("¡Registro de cajón exitoso en Azure!");
+    
+    if (httpCode == 200) {
+      Serial.println("✅ Azure actualizado correctamente.");
     } else {
-      Serial.println("Error al registrar en Azure.");
+      Serial.print("❌ Error Azure: "); Serial.println(httpCode);
     }
     http.end();
   } else {
-    Serial.println("Error al iniciar conexión HTTP.");
+    Serial.println("Error conexión.");
   }
 }

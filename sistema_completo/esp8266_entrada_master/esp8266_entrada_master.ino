@@ -1,31 +1,30 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClientSecure.h>
-#include <ArduinoJson.h>
-#include <time.h>
+#include <WiFiClientSecure.h> 
+#include <ArduinoJson.h> 
+#include <time.h>       
 #include <sys/time.h>   
 
-// --- 1. Configuración WiFi (Tus datos) ---
-// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
-// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
-
-const char* ssid = "IZZI-B790";         // <- WiFi actual
-const char* password = "2C9569A8B790";  // <- WiFi actual
+// --- 1. Configuración WiFi ---
+const char* ssid = "IZZI-B790";
+const char* password = "2C9569A8B790";
 
 // --- 2. AZURE API ---
 const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 
-
 String apiURL_POST = "https://" + String(IP_SERVIDOR) + "/Sensores/EntradaRegistro";
 String apiURL_GET  = "https://" + String(IP_SERVIDOR) + "/Sensores/Disponibilidad";
 
 // --- 3. HARDWARE ---
-const int trigPin = D1;
-const int echoPin = D2;
+const int trigPin = D1; 
+const int echoPin = D2; 
 
 // LEDS
-const int ledRojo = D6;
-const int ledVerde = D7;
-const int ledAzul = D5;            
+const int ledRojo = D6;   
+const int ledVerde = D7;  
+const int ledAzul = D5;   
+
+// SEÑAL AL ARDUINO (Nuevo)
+const int pinSenalArduino = D8; 
 
 const int UMBRAL_DISTANCIA = 5; 
 
@@ -33,8 +32,9 @@ const int UMBRAL_DISTANCIA = 5;
 bool carroPresente = false;
 unsigned long ultimoChequeo = 0;
 bool hayLugares = true;
-bool entradaAutorizada = false; // Nueva variable para saber si la entrada fue autorizada
-unsigned long ultimoParpadeo = 0; 
+bool entradaAutorizada = false;  // Para parpadeo visual
+bool barreraAbierta = false;     // Para saber si se envió señal al Arduino
+unsigned long ultimoParpadeo = 0;
 
 // --- HORA ---
 const char* ntpServer = "pool.ntp.org";
@@ -43,17 +43,21 @@ const int daylightOffset_sec = 0;
 
 void setup() {
   Serial.begin(115200);
+  
   pinMode(trigPin, OUTPUT); pinMode(echoPin, INPUT);
   pinMode(ledRojo, OUTPUT); pinMode(ledVerde, OUTPUT); pinMode(ledAzul, OUTPUT);
   
-  
+  // Configurar pin de señal para el Arduino
+  pinMode(pinSenalArduino, OUTPUT);
+  digitalWrite(pinSenalArduino, LOW); // Inicialmente LOW (Barrera cerrada)
+
   // Test inicial
   digitalWrite(ledRojo, HIGH); delay(200); digitalWrite(ledRojo, LOW);
   digitalWrite(ledVerde, HIGH); delay(200); digitalWrite(ledVerde, LOW);
   digitalWrite(ledAzul, HIGH);  delay(200); digitalWrite(ledAzul, LOW);
 
-  Serial.println("\n--- SISTEMA: DETECCIÓN Y REGISTRO DE ENTRADAS ---");
-  Serial.println("--- BARRERA CONTROLADA POR MICROCONTROLADOR SEPARADO ---");
+  Serial.println("\n--- SISTEMA ESP8266: CEREBRO DE ENTRADA ---");
+  Serial.println("--- ENVIANDO SEÑAL A ARDUINO POR D8 ---");
   
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -77,90 +81,83 @@ void loop() {
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
 
-  Serial.print("Distancia: "); Serial.println(distance);
+  Serial.print("Distancia: "); Serial.println(distance); 
 
-  // ---------------------------------------------------------
-  // CASO ESPECIAL: DISTANCIA CERO (Error de sensor o muy cerca)
-  // ---------------------------------------------------------
+  // CASO ESPECIAL: DISTANCIA CERO (Error)
   if (distance == 0) {
-    digitalWrite(ledAzul, HIGH); // LED azul indica error/distancia cero
+    digitalWrite(ledAzul, HIGH);
     digitalWrite(ledVerde, LOW);
     digitalWrite(ledRojo, LOW);
     delay(200);
-    return; // Salir del loop para evitar procesar datos inválidos
+    return;
   }
 
-  // ---------------------------------------------------------
   // CASO A: CARRO DETECTADO (< 5cm)
-  // ---------------------------------------------------------
   if (distance > 0 && distance <= UMBRAL_DISTANCIA) {
     
-    // Si es un carro NUEVO llegando
     if (carroPresente == false) {
       Serial.println("\n>>> 🚗 CARRO LLEGANDO...");
       digitalWrite(ledAzul, LOW);
 
-      // INICIAR PARPADEO VERDE INMEDIATAMENTE AL DETECTAR CARRO
+      // INICIAR PARPADEO VERDE INMEDIATAMENTE
       entradaAutorizada = true;
       digitalWrite(ledRojo, LOW);
-      ultimoParpadeo = millis(); // Inicializar tiempo de parpadeo
-      Serial.println("🔄 INICIANDO PARPADEO VERDE - PROCESANDO...");
-
-      // Forzar primer parpadeo inmediato
-      digitalWrite(ledVerde, HIGH);
+      ultimoParpadeo = millis();
+      Serial.println("🔄 PROCESANDO...");
+      digitalWrite(ledVerde, HIGH); // Primer flash
 
       int resultado = enviarRegistroEntrada();
-
+      
       if (resultado == 200 || resultado == 201) {
-        Serial.println("✅ AUTORIZADO. REGISTRO ENVIADO - BARRERA SE ABRIRÁ AUTOMÁTICAMENTE");
-        // Mantener entradaAutorizada = true (continúa parpadeando)
+        Serial.println("✅ AUTORIZADO. ABRIENDO BARRERA...");
 
-        // 2. BARRERA CONTROLADA POR SEGUNDO MICROCONTROLADOR
-
-        // NOTA: YA NO ESPERAMOS 5 SEGUNDOS AQUÍ.
-        // LA BARRERA SE QUEDA ARRIBA HASTA QUE EL SENSOR DIGA QUE SE FUE.
+        // --- ENVIAR SEÑAL AL ARDUINO PARA ABRIR ---
+        Serial.println(">>> 📡 MANDANDO SIGNAL AL ARDUINO (HIGH en D8)...");
+        digitalWrite(pinSenalArduino, HIGH);
+        barreraAbierta = true; // Marcar que la barrera se abrió
+        // -----------------------------------------
       }
       else {
-        Serial.println("❌ DENEGADO (Rojo).");
-        // DETENER PARPADEO VERDE Y HACER RECHAZO ROJO
+        Serial.println("❌ DENEGADO.");
         entradaAutorizada = false;
-        digitalWrite(ledVerde, LOW); // Apagar verde fijo
-        // Efecto Rojo (Rechazo)
+        barreraAbierta = false; // No se abrió la barrera
+        digitalWrite(ledVerde, LOW);
         for(int i=0; i<5; i++) { digitalWrite(ledRojo, LOW); delay(100); digitalWrite(ledRojo, HIGH); delay(100); }
         digitalWrite(ledRojo, HIGH);
+
+        // NO enviar señal al Arduino (no autorizado)
+        // digitalWrite(pinSenalArduino, LOW); // Comentado - no enviar
       }
 
-      carroPresente = true; // Activamos el candado
+      carroPresente = true; 
     }
-    // Si carroPresente es true, NO HACEMOS NADA. 
-    // La barrera sigue arriba (si fue autorizado) y el verde sigue prendido.
   }
 
-  // ---------------------------------------------------------
   // CASO B: EL CARRO SE FUE (> 5cm)
-  // ---------------------------------------------------------
   else {
-    // Si había un carro y YA NO LO VEMOS...
     if (carroPresente == true) {
-      Serial.println("\n>>> 💨 EL CARRO YA PASÓ. CERRANDO TODO.");
+      Serial.println("\n>>> 💨 CARRO SE FUE. CERRANDO.");
 
-      // 1. BARRERA YA FUE CERRADA POR EL SEGUNDO MICROCONTROLADOR
+      // --- CERRAR BARRERA SOLO SI REALMENTE SE ABRIÓ ---
+      if (barreraAbierta) {
+        Serial.println(">>> 📡 CORTANDO SIGNAL AL ARDUINO (LOW en D8)...");
+        digitalWrite(pinSenalArduino, LOW);
+        barreraAbierta = false; // Resetear estado
+      } else {
+        Serial.println(">>> 📡 NO SE ENVÍA SEÑAL (carro no autorizado)...");
+      }
+      // -------------------------------------------------
 
-      // 2. Apagar verde (ya pasó)
       digitalWrite(ledVerde, LOW);
       digitalWrite(ledRojo, LOW);
-
-      // 3. Resetear estado de autorización
       entradaAutorizada = false;
-
-      // 4. Resetear inmediatamente (sin cooldown)
       digitalWrite(ledAzul, LOW);
 
-      carroPresente = false; // Liberar candado
-      checarSemaforo();      // Volver a checar disponibilidad para el siguiente
+      carroPresente = false;
+      checarSemaforo();
     }
 
-    // MODO SEMÁFORO NORMAL (Esperando siguiente carro)
+    // MODO SEMÁFORO NORMAL
     if (millis() - ultimoChequeo > 2000) {
       checarSemaforo(); 
       ultimoChequeo = millis();
@@ -177,18 +174,16 @@ void loop() {
   }
 
   // CONTROL DE PARPADEO DEL LED VERDE
-  // Parpadea TODO EL TIEMPO que hay un carro presente (autorizado o no)
   if (carroPresente && entradaAutorizada) {
-    if (millis() - ultimoParpadeo >= 300) { // Parpadea cada 300ms (más rápido)
+    if (millis() - ultimoParpadeo >= 300) { 
       ultimoParpadeo = millis();
-      digitalWrite(ledVerde, !digitalRead(ledVerde)); // Toggle del LED verde
+      digitalWrite(ledVerde, !digitalRead(ledVerde)); 
     }
   } else if (carroPresente && !entradaAutorizada) {
-    // Si hay carro pero fue denegado, mantener rojo fijo
     digitalWrite(ledVerde, LOW);
   }
-
-  delay(200);
+  
+  delay(200); 
 }
 
 // --- FUNCIONES AUXILIARES ---

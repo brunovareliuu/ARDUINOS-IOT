@@ -25,9 +25,13 @@ const int trigPin = D1; // Pin Trig
 const int echoPin = D2; // Pin Echo
 const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
 
-// --- 4.B. Configuración de LEDs (Tu lógica) ---
-const int ledVerdePin = D5;
-const int ledRojoPin = D3;
+// --- 4.B. Configuración de LED RGB (Cajón 3) ---
+const int ledRojoPin = D3;   // Pin para color ROJO del RGB
+const int ledVerdePin = D5;  // Pin para color VERDE del RGB
+const int ledAzulPin = D6;   // Pin para color AZUL del RGB
+
+// --- Estados del LED RGB ---
+enum ColorRGB {ROJO, VERDE, AZUL, BLANCO, AMARILLO, MORADO, CYAN, APAGADO};
 
 // --- 5. Lógica de Tiempos (Tu lógica) ---
 const unsigned long tiempoParaOcupar = 1000; // 1 segundo (en ms)
@@ -44,9 +48,10 @@ void setup() {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
 
-  // Configurar pines de LEDs
-  pinMode(ledVerdePin, OUTPUT);
+  // Configurar pines del LED RGB
   pinMode(ledRojoPin, OUTPUT);
+  pinMode(ledVerdePin, OUTPUT);
+  pinMode(ledAzulPin, OUTPUT);
 
   // --- Conectar a WiFi ---
   delay(10);
@@ -66,9 +71,8 @@ void setup() {
 
   Serial.printf("Sensor del Cajón #%d INICIADO.\n", ID_DE_ESTE_CAJON);
 
-  // Poner estado inicial de LEDs (LIBRE)
-  digitalWrite(ledVerdePin, HIGH);
-  digitalWrite(ledRojoPin, LOW);
+  // Poner estado inicial del LED RGB (LIBRE = VERDE)
+  setColorRGB(VERDE);
 }
 
 
@@ -97,16 +101,14 @@ void loop() {
     return; // Lectura errónea, saltar este ciclo
   }
 
-  // --- ACTUALIZAR LEDs SEGÚN ESTADO ACTUAL ---
-  // Esto asegura que los LEDs siempre reflejen el estado correcto
+  // --- ACTUALIZAR LED RGB SEGÚN ESTADO ACTUAL ---
+  // Esto asegura que el LED RGB siempre refleje el estado correcto
   if (estaOcupado) {
-    // OCUPADO: LED Rojo
-    digitalWrite(ledVerdePin, LOW);
-    digitalWrite(ledRojoPin, HIGH);
+    // OCUPADO: LED ROJO
+    setColorRGB(ROJO);
   } else {
-    // LIBRE: LED Verde
-    digitalWrite(ledVerdePin, HIGH);
-    digitalWrite(ledRojoPin, LOW);
+    // LIBRE: LED VERDE
+    setColorRGB(VERDE);
   }
 
   // --- 2. LA MÁQUINA DE ESTADOS (Tu lógica) ---
@@ -127,9 +129,8 @@ void loop() {
         // El objeto SIGUE AHÍ después de 10 segundos.
         Serial.println("¡CAJÓN OCUPADO!");
 
-        // --- Encender LED Rojo ---
-        digitalWrite(ledVerdePin, LOW);
-        digitalWrite(ledRojoPin, HIGH);
+        // --- Encender LED RGB Rojo ---
+        setColorRGB(ROJO);
 
         llamarAPI(apiURL_Ocupar); // Llamar al POST /OcuparCajon
         estaOcupado = true;      // Cambiar de modo
@@ -158,9 +159,8 @@ void loop() {
         // El objeto SIGUE SIN ESTAR después de 20 segundos.
         Serial.println("¡CAJÓN LIBERADO!");
 
-        // --- Encender LED Verde ---
-        digitalWrite(ledVerdePin, HIGH);
-        digitalWrite(ledRojoPin, LOW);
+        // --- Encender LED RGB Verde ---
+        setColorRGB(VERDE);
 
         llamarAPI(apiURL_Liberar); // Llamar al POST /LiberarCajon
         estaOcupado = false;     // Cambiar de modo
@@ -180,6 +180,59 @@ void loop() {
   delay(2000);
 }
 
+// --- Función para controlar el LED RGB ---
+void setColorRGB(ColorRGB color) {
+  switch (color) {
+    case ROJO:
+      analogWrite(ledRojoPin, 255);   // Máximo rojo
+      analogWrite(ledVerdePin, 0);    // Sin verde
+      analogWrite(ledAzulPin, 0);     // Sin azul
+      break;
+
+    case VERDE:
+      analogWrite(ledRojoPin, 0);     // Sin rojo
+      analogWrite(ledVerdePin, 255);  // Máximo verde
+      analogWrite(ledAzulPin, 0);     // Sin azul
+      break;
+
+    case AZUL:
+      analogWrite(ledRojoPin, 0);     // Sin rojo
+      analogWrite(ledVerdePin, 0);    // Sin verde
+      analogWrite(ledAzulPin, 255);   // Máximo azul
+      break;
+
+    case BLANCO:
+      analogWrite(ledRojoPin, 255);   // Máximo rojo
+      analogWrite(ledVerdePin, 255);  // Máximo verde
+      analogWrite(ledAzulPin, 255);   // Máximo azul
+      break;
+
+    case AMARILLO:
+      analogWrite(ledRojoPin, 255);   // Máximo rojo
+      analogWrite(ledVerdePin, 255);  // Máximo verde
+      analogWrite(ledAzulPin, 0);     // Sin azul
+      break;
+
+    case MORADO:
+      analogWrite(ledRojoPin, 255);   // Máximo rojo
+      analogWrite(ledVerdePin, 0);    // Sin verde
+      analogWrite(ledAzulPin, 255);   // Máximo azul
+      break;
+
+    case CYAN:
+      analogWrite(ledRojoPin, 0);     // Sin rojo
+      analogWrite(ledVerdePin, 255);  // Máximo verde
+      analogWrite(ledAzulPin, 255);   // Máximo azul
+      break;
+
+    case APAGADO:
+    default:
+      analogWrite(ledRojoPin, 0);     // Sin rojo
+      analogWrite(ledVerdePin, 0);    // Sin verde
+      analogWrite(ledAzulPin, 0);     // Sin azul
+      break;
+  }
+}
 
 // --- 3. Función para enviar los POST ---
 void llamarAPI(const char* apiURL_plantilla) {

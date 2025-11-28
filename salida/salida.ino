@@ -1,50 +1,60 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h> // <--- ¡CAMBIO: Para HTTPS (Azure)!
-#include <ArduinoJson.h> 
-#include <time.h>        
-#include <sys/time.h>    
+#include <ArduinoJson.h>
+#include <time.h>
+#include <sys/time.h>
+#include <Servo.h>
 
 // --- 1. Configuración WiFi ---
-const char* ssid = "Tec-IoT";
-const char* password = "spotless.magnetic.bridge";
+// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
+
+const char* ssid = "IZZI-B790";         // <- WiFi actual
+const char* password = "2C9569A8B790";  // <- WiFi actual
 
 // --- 2. Configuración API (AZURE) ---
 // Ponemos el dominio SIN "https://" y SIN "/" al final
-const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 
+const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net";
 
 // URLs actualizadas para HTTPS y sin puerto 5074
 const char* apiURL_POST_Salida = "https://%s/Sensores/SalidaRegistro";
-const char* apiURL_GET_Disponibilidad = "https://%s/Sensores/Disponibilidad";
 
 // --- 3. Configuración Pines ---
 const int botonPin = D1;
-const int ledVerdePin = D2; // Verde = Hay Lugares
-const int ledRojoPin = D4;  // Rojo = Lleno
+const int ledVerdePin = D2; // Verde = Salida permitida
+const int ledRojoPin = D4;  // Rojo = Sistema ocupado/esperando
+const int servoPin = D7;    // Pin para el servo de la barrera
 
-// --- 4. Configuración de Timers ---
-int estadoBotonAnterior = HIGH; 
-unsigned long tiempoAnteriorGET = 0;
-const long intervaloGET = 5000; // 5 segundos
+// --- 4. Variables del Sistema ---
+int estadoBotonAnterior = HIGH;
+bool sistemaOcupado = false; // Para evitar múltiples presiones simultáneas
 
-// --- Configuración de Hora (NTP) ---
+// --- Configuración de Zona Horaria ---
 const char* ntpServer = "pool.ntp.org";
+
+// --- Objeto Servo ---
+Servo barrera;
 
 void setup() {
   Serial.begin(115200);
 
   // Configurar pines
-  pinMode(botonPin, INPUT_PULLUP); 
+  pinMode(botonPin, INPUT_PULLUP);
   pinMode(ledVerdePin, OUTPUT);
   pinMode(ledRojoPin, OUTPUT);
 
-  // Estado inicial de LEDs (Rojo = "Conectando...")
-  digitalWrite(ledVerdePin, LOW);
-  digitalWrite(ledRojoPin, HIGH); 
+  // Configurar servo
+  barrera.attach(servoPin);
+  barrera.write(195); // Barrera arriba inicialmente
 
-  // --- Conectar a WiFi ---
+  // Estado inicial: LEDs apagados durante configuración
+  digitalWrite(ledVerdePin, LOW);
+  digitalWrite(ledRojoPin, LOW);
+
+  // --- 1. Conectar a WiFi ---
   Serial.println();
-  Serial.println("--- Conectando a WiFi (Modo Azure) ---");
+  Serial.println("--- Conectando a WiFi (Sistema de Salida con Barrera) ---");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -54,116 +64,58 @@ void setup() {
   Serial.print("IP del ESP8266: ");
   Serial.println(WiFi.localIP());
 
-  // --- Sincronizar la hora ---
-  Serial.println("Sincronizando hora...");
-  configTime(0, 0, ntpServer); 
-  while (time(nullptr) < 8 * 3600 * 2) { 
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\n¡Hora sincronizada!");
-  
-  Serial.println("Sistema de Salida y Disponibilidad INICIADO.");
-  
-  // Primera llamada para actualizar LEDs
-  actualizarDisponibilidad(); 
+  // --- 2. Configurar zona horaria (sin sincronización NTP para acelerar arranque) ---
+  configTime(-6 * 3600, 0, ntpServer); // GMT-6 (México)
+
+  // --- 3. Sistema listo: Encender LED rojo ---
+  digitalWrite(ledRojoPin, HIGH); // ← LED rojo se enciende SOLO al final
+
+  Serial.println("Sistema de Salida con Barrera INICIADO.");
+  Serial.println("Estado inicial: Esperando salida (LED Rojo, Barrera arriba)");
 }
 
 
 void loop() {
-  // --- TRABAJO 1: Chequear el botón (POST) ---
+  // --- Chequear el botón para activar secuencia de salida ---
   chequearBoton();
-
-  // --- TRABAJO 2: Chequear la disponibilidad (GET) ---
-  unsigned long tiempoActual = millis();
-  if (tiempoActual - tiempoAnteriorGET >= intervaloGET) {
-    tiempoAnteriorGET = tiempoActual; // Reiniciar el timer
-    Serial.println("\nActualizando disponibilidad (GET)...");
-    actualizarDisponibilidad();
-  }
 }
 
-// --- Esta función se encarga SOLO de los LEDs (GET) ---
-void actualizarDisponibilidad() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("GET: No hay WiFi.");
-    digitalWrite(ledVerdePin, LOW);
-    digitalWrite(ledRojoPin, HIGH);
-    return;
-  }
-
-  // --- CAMBIO: Usar WiFiClientSecure para HTTPS ---
-  WiFiClientSecure client;
-  client.setInsecure(); // <--- IMPORTANTE: Confiar en el certificado de Azure
-
-  HTTPClient http;
-
-  // Construir la URL del GET
-  char urlCompleta[150];
-  sprintf(urlCompleta, apiURL_GET_Disponibilidad, IP_SERVIDOR);
-  
-  Serial.print("GET URL: ");
-  Serial.println(urlCompleta);
-
-  if (http.begin(client, urlCompleta)) {
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK) {
-      Serial.println("GET: Respuesta OK (200).");
-      String payload = http.getString();
-      Serial.println(payload); 
-
-      // --- Leer JSON ---
-      StaticJsonDocument<128> doc; 
-      DeserializationError error = deserializeJson(doc, payload);
-
-      if (error) {
-        Serial.print("deserializeJson() falló: ");
-        Serial.println(error.c_str());
-        digitalWrite(ledVerdePin, LOW);
-        digitalWrite(ledRojoPin, HIGH);
-      } else {
-        // ¡Lectura exitosa!
-        int disponibles = doc["disponibles"];
-        Serial.print("Lugares disponibles: ");
-        Serial.println(disponibles);
-
-        // --- LA LÓGICA DE LOS LEDS ---
-        if (disponibles > 0) {
-          Serial.println("Estado: HAY LUGARES");
-          digitalWrite(ledVerdePin, HIGH); // HAY LUGAR
-          digitalWrite(ledRojoPin, LOW);
-        } else {
-          Serial.println("Estado: LLENO");
-          digitalWrite(ledVerdePin, LOW);
-          digitalWrite(ledRojoPin, HIGH); // LLENO
-        }
-      }
-
-    } else {
-      Serial.print("GET: Error en la llamada, código: ");
-      Serial.println(httpCode);
-      digitalWrite(ledVerdePin, LOW);
-      digitalWrite(ledRojoPin, HIGH);
-    }
-    http.end();
-  } else {
-    Serial.println("GET: No se pudo conectar a la URL.");
-  }
-}
-
-
-// --- Esta función se encarga SOLO del botón (POST) ---
+// --- Esta función maneja la secuencia completa de salida ---
 void chequearBoton() {
   int estadoBotonActual = digitalRead(botonPin);
 
-  // Detectar "flanco de bajada"
-  if (estadoBotonActual == LOW && estadoBotonAnterior == HIGH) {
-    Serial.println("\n¡Botón presionado! Registrando salida (POST)...");
+  // Detectar "flanco de subida" y verificar que el sistema no esté ocupado
+  if (estadoBotonActual == HIGH && estadoBotonAnterior == LOW && !sistemaOcupado) {
+    Serial.println("\n¡Botón presionado! Iniciando secuencia de salida...");
+
+    // Marcar sistema como ocupado para evitar múltiples presiones
+    sistemaOcupado = true;
+
+    // 1. PRIMERO: Cambiar a verde y bajar barrera (operación inmediata)
+    Serial.println("Activando salida: LED Verde, Barrera abajo");
+    digitalWrite(ledVerdePin, HIGH);
+    digitalWrite(ledRojoPin, LOW);
+    barrera.write(0); // Bajar barrera (ajusta el ángulo si es necesario)
+
+    // 2. Mantener abierto por 5 segundos
+    delay(5000);
+
+    // 3. Subir barrera y volver a rojo
+    Serial.println("Cerrando salida: LED Rojo, Barrera arriba");
+    barrera.write(195); // Subir barrera
+    delay(1000); // Pequeño delay para que suba completamente
+    digitalWrite(ledVerdePin, LOW);
+    digitalWrite(ledRojoPin, HIGH);
+
+    // 4. DESPUÉS de completar la secuencia física: Registrar salida en la API
+    Serial.println("Registrando salida en el sistema...");
     enviarRegistroSalida();
-    delay(200);
+
+    // 5. Liberar sistema
+    sistemaOcupado = false;
+    Serial.println("Secuencia de salida completada. Sistema listo para nueva salida.");
   }
-  
+
   estadoBotonAnterior = estadoBotonActual;
 }
 

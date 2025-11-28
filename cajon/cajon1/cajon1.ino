@@ -23,11 +23,12 @@ const char* apiURL_Liberar = "https://%s/Sensores/LiberarCajon";
 // --- 4. Configuración Sensor Ultrasónico ---
 const int trigPin = D1; // Pin Trig
 const int echoPin = D2; // Pin Echo
-const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
+const int UMBRAL_DISTANCIA = 6; // Umbral de 4 cm
 
 // --- 4.B. Configuración de LEDs (Tu lógica) ---
 const int ledVerdePin = D5; 
-const int ledRojoPin = D3;  
+const int ledRojoPin = D3;
+
 
 // --- 5. Lógica de Tiempos (Tu lógica) ---
 const unsigned long tiempoParaOcupar = 1000; // 1 segundo (en ms)
