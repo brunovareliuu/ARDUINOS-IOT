@@ -6,11 +6,9 @@
 const int ID_DE_ESTE_CAJON = 3; // <--- CAMBIADO: Este es el Cajón 3
 
 // --- 2. Configuración WiFi (Tus datos) ---
-// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
-// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
+const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
-const char* ssid = "IZZI-B790";         // <- WiFi actual
-const char* password = "2C9569A8B790";  // <- WiFi actual
 
 // --- 3. Configuración API (AZURE) ---
 // Ponemos el dominio SIN "https://" y SIN "/" al final
@@ -23,7 +21,7 @@ const char* apiURL_Liberar = "https://%s/Sensores/LiberarCajon";
 // --- 4. Configuración Sensor Ultrasónico ---
 const int trigPin = D1; // Pin Trig
 const int echoPin = D2; // Pin Echo
-const int UMBRAL_DISTANCIA = 4; // Umbral de 4 cm
+const int UMBRAL_DISTANCIA = 7; // Umbral de 4 cm
 
 // --- 4.B. Configuración de LED RGB (Cajón 3) ---
 const int ledRojoPin = D3;   // Pin para color ROJO del RGB
@@ -33,13 +31,14 @@ const int ledAzulPin = D6;   // Pin para color AZUL del RGB
 // --- Estados del LED RGB ---
 enum ColorRGB {ROJO, VERDE, AZUL, BLANCO, AMARILLO, MORADO, CYAN, APAGADO};
 
-// --- 5. Lógica de Tiempos (Tu lógica) ---
-const unsigned long tiempoParaOcupar = 1000; // 1 segundo (en ms)
-const unsigned long tiempoParaLiberar = 2000; // 2 segundos (en ms)
+// --- 5. Lógica de Debounce (Tu nueva lógica) ---
+const int LECTURAS_OCUPAR = 2;   // 2 lecturas para ocupar (LIBRE → OCUPADO)
+const int LECTURAS_LIBERAR = 3;  // 5 lecturas para liberar (OCUPADO → LIBRE)
 
 // --- 6. Variables de Estado (El "cerebro") ---
 bool estaOcupado = false; // El estado actual que recordamos
-unsigned long tiempoDeCambio = 0; // El temporizador (usa millis())
+int contadorOcupar = 0;    // Cuenta lecturas consecutivas para ocupar
+int contadorLiberar = 0;   // Cuenta lecturas consecutivas para liberar
 
 void setup() {
   Serial.begin(115200);
@@ -111,68 +110,77 @@ void loop() {
     setColorRGB(VERDE);
   }
 
-  // --- 2. LA MÁQUINA DE ESTADOS (Tu lógica) ---
+  // --- 2. SISTEMA DE DEBOUNCE (Tu nueva lógica) ---
 
-  unsigned long tiempoActual = millis(); // El reloj actual
+  // Mostrar contadores actuales
+  Serial.printf("Contadores - Ocupar: %d/%d, Liberar: %d/%d\n",
+                contadorOcupar, LECTURAS_OCUPAR,
+                contadorLiberar, LECTURAS_LIBERAR);
 
   if (estaOcupado == false)
   {
     // MODO: "LIBRE" (Buscando un coche que LLEGUE)
     if (distance <= UMBRAL_DISTANCIA) {
-      // Objeto detectado.
-      if (tiempoDeCambio == 0) {
-        // Es la primera vez que lo vemos, iniciar timer
-        Serial.printf("Objeto detectado... iniciando timer de %lu seg.\n", tiempoParaOcupar / 1000);
-        tiempoDeCambio = tiempoActual;
-      }
-      else if (tiempoActual - tiempoDeCambio > tiempoParaOcupar) {
-        // El objeto SIGUE AHÍ después de 10 segundos.
-        Serial.println("¡CAJÓN OCUPADO!");
+      // Objeto detectado - incrementar contador para ocupar
+      contadorOcupar++;
+      contadorLiberar = 0; // Resetear contador opuesto
+
+      Serial.printf("Objeto detectado (%d cm). Contador ocupar: %d/%d\n",
+                   distance, contadorOcupar, LECTURAS_OCUPAR);
+
+      // Si llega a 2 lecturas consecutivas, ocupar el cajón
+      if (contadorOcupar >= LECTURAS_OCUPAR) {
+        Serial.println("╔══════════════════════════════════════╗");
+        Serial.println("║  🚗 ¡CAJÓN OCUPADO! (10/10)          ║");
+        Serial.println("╚══════════════════════════════════════╝");
 
         // --- Encender LED RGB Rojo ---
         setColorRGB(ROJO);
 
         llamarAPI(apiURL_Ocupar); // Llamar al POST /OcuparCajon
         estaOcupado = true;      // Cambiar de modo
-        tiempoDeCambio = 0;      // Resetear timer
+        contadorOcupar = 0;      // Resetear contador
       }
     }
     else {
-      // No hay objeto. Si había una falsa alarma, resetear el timer.
-      if (tiempoDeCambio > 0) {
-         Serial.println("Falsa alarma. Objeto se fue antes de tiempo.");
+      // No hay objeto - resetear contador de ocupar
+      if (contadorOcupar > 0) {
+         Serial.printf("Falsa alarma. Objeto se fue (%d cm). Reseteando contador.\n", distance);
+         contadorOcupar = 0;
       }
-      tiempoDeCambio = 0;
     }
   }
   else
   {
     // MODO: "OCUPADO" (Buscando un coche que SE VAYA)
     if (distance > UMBRAL_DISTANCIA) {
-      // Objeto ya no está.
-      if (tiempoDeCambio == 0) {
-        // Es la primera vez que no lo vemos, iniciar timer
-        Serial.printf("Objeto no detectado... iniciando timer de %lu seg.\n", tiempoParaLiberar / 1000);
-        tiempoDeCambio = tiempoActual;
-      }
-      else if (tiempoActual - tiempoDeCambio > tiempoParaLiberar) {
-        // El objeto SIGUE SIN ESTAR después de 20 segundos.
-        Serial.println("¡CAJÓN LIBERADO!");
+      // Objeto ya no está - incrementar contador para liberar
+      contadorLiberar++;
+      contadorOcupar = 0; // Resetear contador opuesto
+
+      Serial.printf("Objeto no detectado (%d cm). Contador liberar: %d/%d\n",
+                   distance, contadorLiberar, LECTURAS_LIBERAR);
+
+      // Si llega a 5 lecturas consecutivas, liberar el cajón
+      if (contadorLiberar >= LECTURAS_LIBERAR) {
+        Serial.println("╔══════════════════════════════════════╗");
+        Serial.println("║  ✅ ¡CAJÓN LIBERADO! (10/10)         ║");
+        Serial.println("╚══════════════════════════════════════╝");
 
         // --- Encender LED RGB Verde ---
         setColorRGB(VERDE);
 
         llamarAPI(apiURL_Liberar); // Llamar al POST /LiberarCajon
         estaOcupado = false;     // Cambiar de modo
-        tiempoDeCambio = 0;      // Resetear timer
+        contadorLiberar = 0;     // Resetear contador
       }
     }
     else {
-      // El objeto sigue ahí. Resetear el timer de liberación.
-      if (tiempoDeCambio > 0) {
-         Serial.println("El coche sigue ahí. Reseteando timer de liberación.");
+      // El objeto sigue ahí - resetear contador de liberar
+      if (contadorLiberar > 0) {
+         Serial.printf("El coche sigue ahí (%d cm). Reseteando contador de liberación.\n", distance);
+         contadorLiberar = 0;
       }
-      tiempoDeCambio = 0;
     }
   }
 

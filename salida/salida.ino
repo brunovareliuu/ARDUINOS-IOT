@@ -7,11 +7,8 @@
 #include <Servo.h>
 
 // --- 1. Configuración WiFi ---
-// const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
-// const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
-
-const char* ssid = "IZZI-B790";         // <- WiFi actual
-const char* password = "2C9569A8B790";  // <- WiFi actual
+const char* ssid = "Tec-IoT";                    // <- WiFi anterior (comentado para documentación)
+const char* password = "spotless.magnetic.bridge"; // <- WiFi anterior (comentado para documentación)
 
 // --- 2. Configuración API (AZURE) ---
 // Ponemos el dominio SIN "https://" y SIN "/" al final

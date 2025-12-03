@@ -6,8 +6,11 @@
 #include <sys/time.h>   
 
 // --- 1. Configuración WiFi ---
-const char* ssid = "IZZI-B790";
-const char* password = "2C9569A8B790";
+// const char* ssid = "IZZI-B790";
+// const char* password = "2C9569A8B790";
+
+const char* ssid = "Tec-IoT";
+const char* password = "spotless.magnetic.bridge";
 
 // --- 2. AZURE API ---
 const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 

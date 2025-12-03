@@ -7,10 +7,8 @@
 const int ID_CAJON = 2; 
 
 // --- 2. WIFI ---
-// const char* ssid = "Tec-IoT";
-// const char* password = "spotless.magnetic.bridge";
-const char* ssid = "IZZI-B790";         // <- WiFi actual
-const char* password = "2C9569A8B790";  // <- WiFi actual
+const char* ssid = "Tec-IoT";
+const char* password = "spotless.magnetic.bridge";
 
 // --- 3. AZURE API ---
 const char* IP_SERVIDOR = "estacionamientoiot-a2gbhzbpfvcfgnbf.canadacentral-01.azurewebsites.net"; 
@@ -30,8 +28,14 @@ const int pinAzul = D5;
 
 const int UMBRAL_DISTANCIA = 7; // cm
 
-// --- 5. VARIABLES DE CONTROL ---
+// --- 5. LÓGICA DE DEBOUNCE ---
+const int LECTURAS_OCUPAR = 2;   // 2 lecturas para ocupar (LIBRE → OCUPADO)
+const int LECTURAS_LIBERAR = 3;  // 5 lecturas para liberar (OCUPADO → LIBRE)
+
+// --- 6. VARIABLES DE CONTROL ---
 bool estaOcupado = false; // Memoria del estado actual
+int contadorOcupar = 0;    // Cuenta lecturas consecutivas para ocupar
+int contadorLiberar = 0;   // Cuenta lecturas consecutivas para liberar
 
 void setup() {
   Serial.begin(115200);
@@ -79,35 +83,83 @@ void loop() {
   distance = duration * 0.034 / 2;
 
   Serial.print("Cajon "); Serial.print(ID_CAJON);
-  Serial.print(" | Distancia: "); Serial.print(distance); 
+  Serial.print(" | Distancia: "); Serial.print(distance);
+  Serial.printf(" | Contadores - Ocupar: %d/%d, Liberar: %d/%d",
+                contadorOcupar, LECTURAS_OCUPAR,
+                contadorLiberar, LECTURAS_LIBERAR);
   Serial.println(estaOcupado ? " [OCUPADO]" : " [LIBRE]");
 
-  // --- LÓGICA DE CAMBIO DE ESTADO ---
-  
-  // CASO 1: DETECTA CARRO (y antes estaba libre)
-  if (distance > 0 && distance <= UMBRAL_DISTANCIA && !estaOcupado) {
-    Serial.println(">>> 🚗 CARRO LLEGÓ. CAMBIANDO A OCUPADO (ROJO)...");
-    
-    // 1. Cambiar visualmente primero (Feedback inmediato)
-    ponerColorRojo();
-    
-    // 2. Avisar a Azure
-    enviarEstado(true); // true = Ocupar
-    
-    estaOcupado = true; // Actualizar memoria
+  // --- SISTEMA DE DEBOUNCE ---
+
+  if (!estaOcupado)
+  {
+    // MODO: LIBRE (Buscando carro que llegue)
+    if (distance > 0 && distance <= UMBRAL_DISTANCIA) {
+      // Carro detectado - incrementar contador
+      contadorOcupar++;
+      contadorLiberar = 0; // Resetear opuesto
+
+      Serial.printf("Carro detectado (%d cm). Contador ocupar: %d/%d\n",
+                   distance, contadorOcupar, LECTURAS_OCUPAR);
+
+      // Si llega a 2 lecturas consecutivas
+      if (contadorOcupar >= LECTURAS_OCUPAR) {
+        Serial.println("╔══════════════════════════════════════╗");
+        Serial.println("║  🚗 ¡CAJÓN OCUPADO! (10/10)          ║");
+        Serial.println("╚══════════════════════════════════════╝");
+
+        // 1. Cambiar visualmente
+        ponerColorRojo();
+
+        // 2. Avisar a Azure
+        enviarEstado(true); // true = Ocupar
+
+        estaOcupado = true;
+        contadorOcupar = 0; // Resetear
+      }
+    }
+    else {
+      // No hay carro - resetear contador
+      if (contadorOcupar > 0) {
+         Serial.printf("Falsa alarma (%d cm). Reseteando contador.\n", distance);
+         contadorOcupar = 0;
+      }
+    }
   }
-  
-  // CASO 2: SE VA EL CARRO (y antes estaba ocupado)
-  else if ((distance > UMBRAL_DISTANCIA || distance == 0) && estaOcupado) {
-    Serial.println(">>> 💨 CARRO SE FUE. CAMBIANDO A LIBRE (VERDE)...");
-    
-    // 1. Cambiar visualmente
-    ponerColorVerde();
-    
-    // 2. Avisar a Azure
-    enviarEstado(false); // false = Liberar
-    
-    estaOcupado = false; // Actualizar memoria
+  else
+  {
+    // MODO: OCUPADO (Buscando carro que se vaya)
+    if (distance > UMBRAL_DISTANCIA || distance == 0) {
+      // Carro se fue - incrementar contador
+      contadorLiberar++;
+      contadorOcupar = 0; // Resetear opuesto
+
+      Serial.printf("Carro no detectado (%d cm). Contador liberar: %d/%d\n",
+                   distance, contadorLiberar, LECTURAS_LIBERAR);
+
+      // Si llega a 5 lecturas consecutivas
+      if (contadorLiberar >= LECTURAS_LIBERAR) {
+        Serial.println("╔══════════════════════════════════════╗");
+        Serial.println("║  ✅ ¡CAJÓN LIBERADO! (10/10)         ║");
+        Serial.println("╚══════════════════════════════════════╝");
+
+        // 1. Cambiar visualmente
+        ponerColorVerde();
+
+        // 2. Avisar a Azure
+        enviarEstado(false); // false = Liberar
+
+        estaOcupado = false;
+        contadorLiberar = 0; // Resetear
+      }
+    }
+    else {
+      // Carro sigue ahí - resetear contador
+      if (contadorLiberar > 0) {
+         Serial.printf("Carro sigue ahí (%d cm). Reseteando contador.\n", distance);
+         contadorLiberar = 0;
+      }
+    }
   }
   
   delay(1000); // Revisar cada segundo
